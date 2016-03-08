@@ -15,7 +15,7 @@
 //
 /////////////////////////////////////////////////////////////
 
-#define DEBOGGAGE 0
+#define DEBOGGAGE 1
 
 // Numéro de pin des sorties vers les moteurs
 const int moteur_avant   =  9;
@@ -34,7 +34,15 @@ const int mannette_droite  = 12;
 const int mannette_vitesse = A7;  
 
 // Durée minimale de la boucle principale
-const int dt = 10;
+#if DEBOGGAGE
+const int dt = 1000; // 1 fois par seconde en mode déboggage
+#else
+const int dt = 10;   // À 100 Hz en fonctionnement normal
+#endif
+
+// Zone morte du contrôle de direction
+const float direction_assez_precis = 0.1;
+const int direction_vitesse_moteur = 255;
 
 /////////////////////////////////////////////////////////////
 //
@@ -89,7 +97,8 @@ void loop() {
 
   // Convertir la lecture analogique entière entre 20% et 100% de 255
   float vitesse_f = (vitesse_i / 1023.0);
-  vitesse_moteur = max(vitesse_f, 0.1) * 255.0;
+  //vitesse_moteur = max(vitesse_f, 0.1) * 255.0;
+  vitesse_moteur = 0.1 * 255.0;
 
 #if DEBOGGAGE
   Serial.print(F("Vitesse au potentiometre: "));
@@ -109,25 +118,58 @@ void loop() {
     analogWrite(moteur_avant, 0);
   }
   if(bouton_arriere == LOW) {
-      // Activer le moteur arrière
-      analogWrite(moteur_arriere, vitesse_moteur);
+    // Activer le moteur arrière
+    analogWrite(moteur_arriere, vitesse_moteur);
   }
   else {
     analogWrite(moteur_arriere, 0);
   }
   
   // Lire la direction actuelle
-  int direction_i = analogRead(mesure_direction);
+  int direction_mesure_i = analogRead(mesure_direction);
   // Convertir la lecture analogique entière entre -1 et 1
-  float direction_f = 2.0 * (direction_i - 44.0) / (1023.0 - 44.0) - 1.0;
+  float direction_mesure_f = 2.0 * (direction_mesure_i - 44.0) / (1023.0 - 44.0) - 1.0;
 
 #if DEBOGGAGE
-  Serial.print(F("Direction au potentiometre: "));
-  Serial.print(direction_i);
+  Serial.print(F("Direction lue au potentiometre: "));
+  Serial.print(direction_mesure_i);
   Serial.print(F(", une fois convertie entre -1 et 1: ")); 
-  Serial.print(direction_f);
+  Serial.print(direction_mesure_f);
   Serial.println(F(".")); 
 #endif
 
+  // Lire la direction voulue (utilisant le contrôle de vitesse pour l'instant)
+  int direction_voulue_i = vitesse_i;
+  // Convertir la lecture analogique entière entre -1 et 1
+  float direction_voulue_f = 2.0 * direction_voulue_i / 1023.0 - 1.0;
+
+  // Calculer l'erreur et la correction
+  float erreur_direction = direction_voulue_f - direction_mesure_f;
+
+  if(erreur_direction < -direction_assez_precis) {
+    // Tourner les roues vers la gauche
+    analogWrite(moteur_gauche, direction_vitesse_moteur);    
+    analogWrite(moteur_droite, 0);    
+  }
+  else if(erreur_direction > direction_assez_precis) {
+    // Tourner les roues vers la droite
+    analogWrite(moteur_gauche, 0);
+    analogWrite(moteur_droite, direction_vitesse_moteur);    
+  }
+  else {
+    // Arrêter les roues
+    analogWrite(moteur_gauche, 0);
+    analogWrite(moteur_droite, 0);    
+  }
+  
+#if DEBOGGAGE
+  Serial.print(F("Direction desiree: "));
+  Serial.print(direction_voulue_f);
+  Serial.print(F(", erreur: ")); 
+  Serial.print(erreur_direction);
+  Serial.println(F(".")); 
+#endif
+
+  // Attendre un peu avant de recommencer
   delay(dt);
 }
