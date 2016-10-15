@@ -15,7 +15,7 @@
 //
 /////////////////////////////////////////////////////////////
 
-#define DEBOGGAGE 1
+#define DEBOGGAGE 0
 
 // Numéro de pin des sorties vers les moteurs
 const int moteur_avant   =  9;
