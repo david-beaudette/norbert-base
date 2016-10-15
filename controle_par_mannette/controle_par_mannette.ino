@@ -53,8 +53,10 @@ const int direction_vitesse_moteur = 255;
 void setup() {
   // Initialisation de la communication série
   Serial.begin(115200);
-  
-  Serial.println(F("Controle de Norbert par mannette"));
+  char o_accent_circonflexe = 244;
+  Serial.print(F("Contr"));
+  Serial.print(o_accent_circonflexe);
+  Serial.println(F("le de Norbert par mannette"));
   Serial.println(F("David Beaudette (2016)"));
   
   // Initialisation des sorties vers les moteurs
