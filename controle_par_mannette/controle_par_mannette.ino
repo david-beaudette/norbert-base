@@ -19,7 +19,7 @@
 //
 /////////////////////////////////////////////////////////////
 
-#define DEBOGGAGE 0
+#define DEBOGGAGE 1
 
 // Encodeur de roue droite
 const int encodeur_a = 2;
@@ -66,6 +66,7 @@ const int filtre_mannette_pot_decal = 5;
 // Parametres de controle des moteurs
 const int vitesse_zero_tol_tic_par_cycle = 3;
 const float moteur_gain_pid[3] = {0.05f, 0.01f, 0.0f};
+const float moteur_ir_gain_pid[3] = {0.3f, 0.01f, 0.0f};
 
 // Périodes entre les appels de fonction
 const int periode_affichage_ms = 1000; 
@@ -276,14 +277,17 @@ void controle_moteurs() {
   // PWM entre 20% et 100%
   int vitesse_moteur_min = int(0.2f * 255.0f);
   int vitesse_moteur_nom = int(0.2f * 255.0f);
-  if(commande_avance == HIGH && commande_recule == HIGH) {
+  if(digitalRead(bouton) == LOW) {
+    // Vitesse basée sur la distance arriere
+    vitesse_cmd = map(ir_arriere_filtre, 184, 850, 20, 255);
+  }
+  else if(commande_avance == HIGH && commande_recule == HIGH) {
     // Freinage
     vitesse_cmd = constrain((int)pid(moteur_integrale_erreur, 
                                      moteur_erreur_prec,
                                      0,
                                      vitesse_tic_par_cycle,
                                      moteur_gain_pid), -255, 255);
-    if(abs(vitesse_cmd) < vitesse_moteur_min) vitesse_cmd = 0;
   }
   else {   
     if(commande_avance == LOW) {
@@ -297,6 +301,7 @@ void controle_moteurs() {
   }
   
   // Mise a jour de la commande PWM
+  if(abs(vitesse_cmd) < vitesse_moteur_min) vitesse_cmd = 0;
   if(vitesse_cmd > 0) {
     // Activer le moteur avant
     analogWrite(moteur_avant, vitesse_cmd);
