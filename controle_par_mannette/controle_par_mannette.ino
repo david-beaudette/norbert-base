@@ -30,8 +30,8 @@ const int encodeur_int_b = 1;
 // Numéro de pin des sorties vers les moteurs
 const int moteur_avant   =  9;
 const int moteur_arriere = 10;
-const int moteur_gauche  =  6;  
-const int moteur_droite  = 11; 
+const int moteur_gauche  = 11;  
+const int moteur_droite  =  6; 
 
 // Numéro de pin de l'entrée de direction
 const int mesure_direction = A6;
@@ -122,8 +122,11 @@ void lire_entrees_analogiques();
 // Affichage de l'état du systeme
 void affichage();
 
-// Controle de la direction et de la propulsion
+// Controle de la propulsion
 void controle_moteurs();
+
+// Controle de la direction
+void controle_direction();
 
 // Controle de la direction et de la propulsion
 float pid(long &integrale,
@@ -187,6 +190,9 @@ void setup() {
                    
   sequenceur.every(periode_controle_moteurs_ms, 
                    controle_moteurs);  
+                   
+  sequenceur.every(periode_controle_moteurs_ms, 
+                   controle_direction);  
 }
 
 /////////////////////////////////////////////////////////////
@@ -263,6 +269,26 @@ void affichage() {
 #endif
 
 }
+
+void controle_direction() {
+  
+  // Lire l'état des controles sur la manette
+  int commande_gauche = digitalRead(mannette_gauche);
+  int commande_droite = digitalRead(mannette_droite);
+  int vitesse_cmd = map(mannette_pot_filtre, 0, 1023, -255, 255);
+  if(vitesse_cmd < -100) {
+    analogWrite(moteur_gauche, -vitesse_cmd);    
+    analogWrite(moteur_droite, 0);    
+  }
+  else if(vitesse_cmd > 100) {
+    analogWrite(moteur_gauche, 0);    
+    analogWrite(moteur_droite, vitesse_cmd);    
+  }
+  else {
+    analogWrite(moteur_gauche, 0);    
+    analogWrite(moteur_droite, 0);    
+  }
+}  
 
 void controle_moteurs() {
   
