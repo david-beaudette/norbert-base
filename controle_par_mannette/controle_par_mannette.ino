@@ -3,7 +3,7 @@
 // norbert-base -> controle_par_manette
 //
 // Permet de contrôler la base Tonka de Norbert en utilisant
-// une mannette fabriquée en Lego
+// une mannette fabriquee en Lego
 //
 // David Beaudette (2016)
 //
@@ -27,16 +27,16 @@ const int encodeur_b = 3;
 const int encodeur_int_a = 0;
 const int encodeur_int_b = 1;
 
-// Numéro de pin des sorties vers les moteurs
+// Numero de pin des sorties vers les moteurs
 const int moteur_avant   =  9;
 const int moteur_arriere = 10;
 const int moteur_gauche  = 11;  
 const int moteur_droite  =  6; 
 
-// Numéro de pin de l'entrée de direction
+// Numero de pin de l'entree de direction
 const int mesure_direction = A6;
 
-// Numéro de pin de la mannette
+// Numero de pin de la mannette
 const int mannette_avant   =  4;
 const int mannette_arriere =  7;
 const int mannette_gauche  =  8; 
@@ -47,9 +47,19 @@ const int mannette_del     =  5;
 // Batterie
 const int batterie = A4;
 
+// Convertisseur analogique a numerique
+const float adc_vref = 3.4f;
+const float adc_max_f32 = 1023.0f;
+const float adc_to_volts = adc_vref / adc_max_f32;
+
 // Capteurs de distance
 const int ir_avant   = A3;
 const int ir_arriere = A2;
+const float ir_fonction_coeff[5] = { 0.034f, 
+                                    -0.424f, 
+                                     1.760f, 
+                                    -3.127f, 
+                                     2.388f};
 
 // Bouton 
 const int bouton = 19;
@@ -64,15 +74,29 @@ const int filtre_ir_decal = 4;
 const int filtre_mannette_pot_decal = 5;
 
 // Parametres de controle des moteurs
+const int vitesse_av_moteur_nom = int(0.2f * 255.0f);
 const int vitesse_zero_tol_tic_par_cycle = 3;
-const float moteur_gain_pid[3] = {0.05f, 0.01f, 0.0f};
-const float moteur_ir_gain_pid[3] = {0.3f, 0.01f, 0.0f};
+const float moteur_av_gain_pid[3] = {0.05f, 0.01f, 0.0f};
+const int moteur_av_zone_morte = int(0.2f * 255.0f);
 
-// Périodes entre les appels de fonction
-const int periode_affichage_ms = 1000; 
+const float moteur_gd_gain_pid[3] = {0.05f, 0.01f, 0.0f};
+const int moteur_gd_zone_morte = 100;
+
+// Periodes entre les appels de fonction
+const int periode_affichage_ms          = 1000; 
+const int periode_controle_moteurs_ms   = 100;
 const int periode_lecture_analogique_ms = 10;
-const int periode_controle_moteurs_ms = 100;
+const int periode_controle_led_ms       = 10;
 
+
+/////////////////////////////////////////////////////////////
+//
+// Types de donnees
+//
+/////////////////////////////////////////////////////////////
+
+enum direction_t {gauche, centre, droite};
+enum mouvement_t {recule, arrete, avance};
 
 /////////////////////////////////////////////////////////////
 //
@@ -93,15 +117,25 @@ long mannette_pot_filtre = 0;
 
 // Controle de la vitesse
 long vitesse_tic_par_cycle = 0;
-long vitesse_cmd;
+long vitesse_av_cmd;
 long roue_phase_precedente = 0;
 long moteur_integrale_erreur = 0;
 long moteur_erreur_prec = 0;
 
+// Controle de la direction
+long moteur_gd_integrale_erreur = 0;
+long moteur_gd_erreur_prec = 0;
+long vitesse_gd_cmd;
+
+// État de la mannette
+direction_t interrupteur_mannette_precedent = centre; 
+mouvement_t mannette_mouvement_precedent  = arrete; 
+bool interrupteur_mannette_modifiee = false; 
+
 // Communication avec le cerveau RPi
 //CmdMessenger cerveau = CmdMessenger(Serial, ',',';','/');
 
-// Séquenceur de fonctions
+// Sequenceur de fonctions
 Timer sequenceur;
 
 /////////////////////////////////////////////////////////////
@@ -116,11 +150,16 @@ long lire_phase();
 // Using direct port manipulation for quadrature decoding.
 void interruption_encodeur();
 
-// Lecture des entrées analogiques et mise a jour des filtres
+// Lecture des entrees analogiques et mise a jour des filtres
 void lire_entrees_analogiques();
 
-// Affichage de l'état du systeme
+// Affichage de l'etat du systeme
 void affichage();
+
+// Controle de la led sur la manette
+void allume_led();
+void eteint_led();
+void controle_led();
 
 // Controle de la propulsion
 void controle_moteurs();
@@ -142,7 +181,7 @@ float pid(long &integrale,
 /////////////////////////////////////////////////////////////
 
 void setup() {
-  // Initialisation de la communication série
+  // Initialisation de la communication serie
   Serial.begin(115200);
   char o_accent_circonflexe = 244;
   Serial.print(F("Contr"));
@@ -156,13 +195,16 @@ void setup() {
   pinMode(moteur_gauche,  OUTPUT);  
   pinMode(moteur_droite,  OUTPUT); 
   
-  // Initialisation des entrées de la mannette
+  // Initialisation des entrees de la mannette
   pinMode(mannette_avant,   INPUT_PULLUP);  
   pinMode(mannette_arriere, INPUT_PULLUP); 
   pinMode(mannette_gauche,  INPUT_PULLUP); 
   pinMode(mannette_droite,  INPUT_PULLUP); 
   
-  // Entrées analogiques
+  // Affichage sur la manette
+  pinMode(mannette_del,   OUTPUT); 
+  
+  // Entrees analogiques
   pinMode(mannette_pot, INPUT); 
   pinMode(mesure_direction, INPUT); 
   pinMode(ir_avant,   INPUT); 
@@ -170,7 +212,7 @@ void setup() {
   pinMode(batterie, INPUT); 
   analogReference(EXTERNAL);
 
-  // Entrées numériques
+  // Entrees numeriques
   pinMode(bouton, INPUT_PULLUP); 
 
   // Initialisation de l'encodeur de roue
@@ -181,7 +223,7 @@ void setup() {
   
   // Initialisation du PID de la direction
   
-  // Initialisation des fonctions périodiques
+  // Initialisation des fonctions periodiques
   sequenceur.every(periode_lecture_analogique_ms, 
                    lire_entrees_analogiques); 
                    
@@ -193,6 +235,9 @@ void setup() {
                    
   sequenceur.every(periode_controle_moteurs_ms, 
                    controle_direction);  
+                   
+  sequenceur.every(periode_controle_led_ms, 
+                   controle_led);  
 }
 
 /////////////////////////////////////////////////////////////
@@ -229,7 +274,7 @@ void interruption_encodeur()
   portd = pd;
 }
 
-// Lecture et filtrage des entrées analogiques
+// Lecture et filtrage des entrees analogiques
 void lire_entrees_analogiques() {
   // Mise a jour des filtres
   batterie_filtre += (analogRead(batterie) - batterie_filtre) >> filtre_batterie_decal;
@@ -243,26 +288,68 @@ void lire_entrees_analogiques() {
 void affichage() {
   
 #if DEBOGGAGE
-  Serial.print(F("Mannette avant:")); 
-  Serial.println(digitalRead(mannette_avant)); 
-  Serial.print(F("Mannettea arriere:")); 
-  Serial.println(digitalRead(mannette_arriere)); 
-  Serial.print(F("La phase de la roue droite est:")); 
+  Serial.println(); 
+  Serial.print(F("Mannette mouvement: ")); 
+  switch(mannette_mouvement_precedent)
+  {
+      case recule: Serial.println(F("recule.")); break;
+      case arrete: Serial.println(F("arrete.")); break;
+      case avance: Serial.println(F("avance.")); break;
+  }  
+  Serial.print(F("Mannette direction: ")); 
+  switch(interrupteur_mannette_precedent)
+  {
+      case gauche: Serial.println(F("gauche.")); break;
+      case centre: Serial.println(F("centre.")); break;
+      case droite: Serial.println(F("droite.")); break;
+  }  
+  Serial.print(F("La phase de la roue droite est: ")); 
   Serial.println(lire_phase()); 
-  Serial.print(F("La vitesse est:")); 
+  
+  Serial.print(F("La vitesse est: ")); 
   Serial.println(vitesse_tic_par_cycle); 
-  Serial.print(F("La vitesse commandée est:")); 
-  Serial.println(vitesse_cmd); 
-  Serial.print(F("L'etat du bouton est:")); 
+  
+  Serial.print(F("La vitesse commandee est: ")); 
+  Serial.println(vitesse_av_cmd); 
+  
+  Serial.print(F("L'etat du bouton est: ")); 
   Serial.println(digitalRead(bouton));
-  Serial.print(F("L'etat de la batterie est:")); 
-  Serial.println(batterie_filtre);
-  Serial.print(F("L'etat du capteur avant est:")); 
-  Serial.println(ir_avant_filtre);
-  Serial.print(F("L'etat du capteur arriere est:")); 
-  Serial.println(ir_arriere_filtre);
-  Serial.print(F("L'etat du potentiometre de la mannette est:")); 
+  
+  Serial.print(F("L'etat de la batterie est: ")); 
+  Serial.print(static_cast<float>(batterie_filtre) * 0.0125f);
+  Serial.print(F(" V (")); 
+  Serial.print(batterie_filtre);
+  Serial.println(F(").")); 
+  
+  float ir_distance;
+  float a;
+  Serial.print(F("L'etat du capteur avant est: ")); 
+  a = static_cast<float>(ir_avant_filtre) * adc_to_volts;
+  ir_distance =  ir_fonction_coeff[0] * a * a * a * a;
+  ir_distance += ir_fonction_coeff[1] * a * a * a; 
+  ir_distance += ir_fonction_coeff[2] * a * a; 
+  ir_distance += ir_fonction_coeff[3] * a; 
+  ir_distance += ir_fonction_coeff[4]; 
+  Serial.print(ir_distance * 100.0f);
+  Serial.print(F(" cm (")); 
+  Serial.print(ir_avant_filtre);
+  Serial.println(F(").")); 
+  
+  Serial.print(F("L'etat du capteur arriere est: ")); 
+  a = static_cast<float>(ir_arriere_filtre) * adc_to_volts;
+  ir_distance =  ir_fonction_coeff[0] * a * a * a * a;
+  ir_distance += ir_fonction_coeff[1] * a * a * a; 
+  ir_distance += ir_fonction_coeff[2] * a * a; 
+  ir_distance += ir_fonction_coeff[3] * a; 
+  ir_distance += ir_fonction_coeff[4]; 
+  Serial.print(ir_distance * 100.0f);
+  Serial.print(F(" cm (")); 
+  Serial.print(ir_arriere_filtre);
+  Serial.println(F(").")); 
+
+  Serial.print(F("L'etat du potentiometre de la mannette est: ")); 
   Serial.println(mannette_pot_filtre);
+  
   Serial.print(F("Direction lue: "));
   Serial.println(direction_filtre);
 
@@ -270,19 +357,51 @@ void affichage() {
 
 }
 
+void lecture_interrupteur_mannette() {
+  
+  // Lire l'etat des controles sur la manette
+  int interrupteur_gauche = !digitalRead(mannette_gauche);
+  int interrupteur_droite = !digitalRead(mannette_droite);
+  
+  direction_t interrupteur_mannette_actuel;
+  
+  if(interrupteur_gauche) {
+    interrupteur_mannette_actuel = gauche;
+  }
+  else if(interrupteur_droite) {
+    interrupteur_mannette_actuel = droite;
+  }
+  else {
+    interrupteur_mannette_actuel = centre;
+  }
+  
+  // Mise a jour de la memoire de direction
+  if(interrupteur_mannette_precedent == interrupteur_mannette_actuel) {
+    interrupteur_mannette_modifiee = false;
+  }
+  else {
+    interrupteur_mannette_modifiee = true;
+  }
+  interrupteur_mannette_precedent = interrupteur_mannette_actuel;
+}
+  
 void controle_direction() {
   
-  // Lire l'état des controles sur la manette
-  int commande_gauche = digitalRead(mannette_gauche);
-  int commande_droite = digitalRead(mannette_droite);
-  int vitesse_cmd = map(mannette_pot_filtre, 0, 1023, -255, 255);
-  if(vitesse_cmd < -100) {
-    analogWrite(moteur_gauche, -vitesse_cmd);    
+  int direction_cmd = constrain(mannette_pot_filtre, 12, 980);
+  
+  vitesse_gd_cmd = constrain((int)pid(moteur_gd_integrale_erreur, 
+                                      moteur_gd_erreur_prec,
+                                      direction_cmd,
+                                      direction_filtre - 36,
+                                      moteur_gd_gain_pid), -255, 255);
+  
+  if(vitesse_gd_cmd < -moteur_gd_zone_morte) {
+    analogWrite(moteur_gauche, -vitesse_gd_cmd);    
     analogWrite(moteur_droite, 0);    
   }
-  else if(vitesse_cmd > 100) {
+  else if(vitesse_gd_cmd > moteur_gd_zone_morte) {
     analogWrite(moteur_gauche, 0);    
-    analogWrite(moteur_droite, vitesse_cmd);    
+    analogWrite(moteur_droite, vitesse_gd_cmd);    
   }
   else {
     analogWrite(moteur_gauche, 0);    
@@ -290,59 +409,95 @@ void controle_direction() {
   }
 }  
 
+void allume_led() {
+  digitalWrite(mannette_del, 1);
+}
+
+void eteint_led() {
+  digitalWrite(mannette_del, 0);
+}
+
+void controle_led() {
+  
+  switch(interrupteur_mannette_precedent)
+  {
+    case gauche: 
+      allume_led(); 
+      break;
+    case centre: 
+      if(interrupteur_mannette_modifiee) {
+        sequenceur.oscillate(mannette_del, 1000U, 1, 3);
+      }
+      break;
+    case droite: 
+      eteint_led(); 
+      break;
+  }  
+}  
+
 void controle_moteurs() {
   
-  // Lire l'état des controles sur la manette
-  int commande_avance = digitalRead(mannette_avant);
-  int commande_recule = digitalRead(mannette_arriere);
+  // Lire l'etat des controles sur la manette
+  int commande_avance = !digitalRead(mannette_avant);
+  int commande_recule = !digitalRead(mannette_arriere);
   
+  mouvement_t mannette_mouvement_actuel;
+  
+  if(commande_avance) {
+    mannette_mouvement_actuel = avance;
+  }
+  else if(commande_recule) {
+    mannette_mouvement_actuel = recule;
+  }
+  else {
+    mannette_mouvement_actuel = arrete;
+  }
+   
   // Lire la phase de la roue
   long roue_phase_courante = lire_phase();
   vitesse_tic_par_cycle = roue_phase_courante - roue_phase_precedente;
   
-  // PWM entre 20% et 100%
-  int vitesse_moteur_min = int(0.2f * 255.0f);
-  int vitesse_moteur_nom = int(0.2f * 255.0f);
   if(digitalRead(bouton) == LOW) {
-    // Vitesse basée sur la distance arriere
-    vitesse_cmd = map(ir_arriere_filtre, 184, 850, 20, 255);
+    // Vitesse basee sur la distance arriere
+    vitesse_av_cmd = map(ir_arriere_filtre, 184, 850, 20, 255);
   }
-  else if(commande_avance == HIGH && commande_recule == HIGH) {
+  else if(mannette_mouvement_actuel == arrete) {
     // Freinage
-    vitesse_cmd = constrain((int)pid(moteur_integrale_erreur, 
+    vitesse_av_cmd = constrain((int)pid(moteur_integrale_erreur, 
                                      moteur_erreur_prec,
                                      0,
                                      vitesse_tic_par_cycle,
-                                     moteur_gain_pid), -255, 255);
+                                     moteur_av_gain_pid), -255, 255);
   }
   else {   
-    if(commande_avance == LOW) {
+    if(mannette_mouvement_actuel == avance) {
       // Activer le moteur avant
-       vitesse_cmd = vitesse_moteur_nom;
+       vitesse_av_cmd = vitesse_av_moteur_nom;
     }
-    else if(commande_recule == LOW) {
+    else if(mannette_mouvement_actuel == recule) {
       // Activer le moteur arrière
-       vitesse_cmd = -vitesse_moteur_nom;
+       vitesse_av_cmd = -vitesse_av_moteur_nom;
     }
   }
   
   // Mise a jour de la commande PWM
-  if(abs(vitesse_cmd) < vitesse_moteur_min) vitesse_cmd = 0;
-  if(vitesse_cmd > 0) {
+  if(abs(vitesse_av_cmd) < vitesse_av_moteur_min) vitesse_av_cmd = 0;
+  if(vitesse_av_cmd > moteur_av_zone_morte) {
     // Activer le moteur avant
-    analogWrite(moteur_avant, vitesse_cmd);
+    analogWrite(moteur_avant, vitesse_av_cmd);
     analogWrite(moteur_arriere, 0);
   }
-  else if(vitesse_cmd < 0) {
+  else if(vitesse_av_cmd < -moteur_av_zone_morte) {
     // Activer le moteur arrière
     analogWrite(moteur_avant, 0);
-    analogWrite(moteur_arriere, -vitesse_cmd);
+    analogWrite(moteur_arriere, -vitesse_av_cmd);
   }
   else {    
     analogWrite(moteur_avant, 0);
     analogWrite(moteur_arriere, 0);
   }
-  // Mise a jour de la phase précédente
+  // Mise a jour de la memoire
+  mannette_mouvement_precedent = mannette_mouvement_actuel;
   roue_phase_precedente = roue_phase_courante;
 }  
 
@@ -354,7 +509,7 @@ float pid(long &integrale,
   
   long erreur = commande_desiree - lecture;
   
-  // A voir si l'intégrale diverge sans mise a jour conditionnelle
+  // A voir si l'integrale diverge sans mise a jour conditionnelle
   integrale += erreur;      
           
   float commande_pid = gain_pid[0] * (float)erreur + 
