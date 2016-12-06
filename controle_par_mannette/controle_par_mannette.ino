@@ -19,7 +19,7 @@
 //
 /////////////////////////////////////////////////////////////
 
-#define DEBOGGAGE 1
+#define DEBOGGAGE 0
 
 // Encodeur de roue droite
 const int encodeur_a = 2;
@@ -69,23 +69,26 @@ const long batterie_mV_max = 11100;
 
 // Parametres de filtrage
 const int filtre_batterie_decal = 7;
-const int filtre_direction_decal = 3;
+const int filtre_direction_decal = 1;
 const int filtre_ir_decal = 4;
-const int filtre_mannette_pot_decal = 5;
+const int filtre_mannette_pot_decal = 1;
 
 // Parametres de controle des moteurs
+const int pwm_max = 255;
+
 const int vitesse_av_moteur_nom = int(0.2f * 255.0f);
 const int vitesse_zero_tol_tic_par_cycle = 3;
 const float moteur_av_gain_pid[3] = {0.05f, 0.01f, 0.0f};
-const int moteur_av_zone_morte = int(0.2f * 255.0f);
+const int moteur_av_zone_morte = 0;
 
-const float moteur_gd_gain_pid[3] = {0.05f, 0.01f, 0.0f};
-const int moteur_gd_zone_morte = 100;
+const float moteur_gd_gain_pid[3] = {0.20f, 0.0f, 0.05f};
+const int moteur_gd_zone_morte = 50;
+const int moteur_gd_vitesse_max = 150;
 
 // Periodes entre les appels de fonction
 const int periode_affichage_ms          = 1000; 
-const int periode_controle_moteurs_ms   = 100;
-const int periode_lecture_analogique_ms = 10;
+const int periode_controle_moteurs_ms   = 10;
+const int periode_lecture_analogique_ms = 5;
 const int periode_controle_led_ms       = 10;
 
 
@@ -117,15 +120,17 @@ long mannette_pot_filtre = 0;
 
 // Controle de la vitesse
 long vitesse_tic_par_cycle = 0;
-long vitesse_av_cmd;
+int vitesse_av_cmd;
 long roue_phase_precedente = 0;
 long moteur_integrale_erreur = 0;
 long moteur_erreur_prec = 0;
+int  moteur_commande_prec = 0;
 
 // Controle de la direction
+int vitesse_gd_cmd = 0;
 long moteur_gd_integrale_erreur = 0;
 long moteur_gd_erreur_prec = 0;
-long vitesse_gd_cmd;
+int moteur_gd_commande_prec = 0;
 
 // État de la mannette
 direction_t interrupteur_mannette_precedent = centre; 
@@ -168,12 +173,16 @@ void controle_moteurs();
 void controle_direction();
 
 // Controle de la direction et de la propulsion
-float pid(long &integrale,
-          long &erreur_prec,
-          const long commande_desiree, 
-          const long lecture, 
-          const float *gain_pid);
-
+int pid(long &integrale,
+        long &erreur_prec,
+        int &commande_prec,
+        const long commande_desiree, 
+        const long lecture,
+        const int integrale_erreur_min, 
+        const int commande_min, 
+        const int commande_max, 
+        const float *gain_pid);
+        
 /////////////////////////////////////////////////////////////
 //
 // Initialisation
@@ -281,7 +290,7 @@ void lire_entrees_analogiques() {
   ir_avant_filtre += (analogRead(ir_avant) - ir_avant_filtre) >> filtre_ir_decal;
   ir_arriere_filtre += (analogRead(ir_arriere) - ir_arriere_filtre) >> filtre_ir_decal;
   mannette_pot_filtre += (analogRead(mannette_pot) - mannette_pot_filtre) >> filtre_mannette_pot_decal;
-  direction_filtre += (analogRead(mesure_direction) - direction_filtre) >> filtre_direction_decal;
+  direction_filtre = (analogRead(mesure_direction));// - direction_filtre) >> filtre_direction_decal;
  
 }
 
@@ -353,6 +362,9 @@ void affichage() {
   Serial.print(F("Direction lue: "));
   Serial.println(direction_filtre);
 
+  Serial.print(F("La vitesse commandee est: ")); 
+  Serial.println(vitesse_gd_cmd); 
+  
 #endif
 
 }
@@ -387,21 +399,26 @@ void lecture_interrupteur_mannette() {
   
 void controle_direction() {
   
-  int direction_cmd = constrain(mannette_pot_filtre, 12, 980);
+  int direction_cmd = mannette_pot_filtre;
   
-  vitesse_gd_cmd = constrain((int)pid(moteur_gd_integrale_erreur, 
-                                      moteur_gd_erreur_prec,
-                                      direction_cmd,
-                                      direction_filtre - 36,
-                                      moteur_gd_gain_pid), -255, 255);
+  vitesse_gd_cmd = pid(moteur_gd_integrale_erreur, 
+                       moteur_gd_erreur_prec,
+                       moteur_gd_commande_prec,
+                       direction_cmd,
+                       direction_filtre,
+                      -moteur_gd_vitesse_max, 
+                       moteur_gd_vitesse_max,
+                       moteur_gd_gain_pid);
   
-  if(vitesse_gd_cmd < -moteur_gd_zone_morte) {
-    analogWrite(moteur_gauche, -vitesse_gd_cmd);    
+  if(vitesse_gd_cmd > moteur_gd_zone_morte &&
+     direction_filtre < 1020) {
+    analogWrite(moteur_gauche, vitesse_gd_cmd);    
     analogWrite(moteur_droite, 0);    
   }
-  else if(vitesse_gd_cmd > moteur_gd_zone_morte) {
+  else if(vitesse_gd_cmd < -moteur_gd_zone_morte &&
+          direction_filtre > 3) {
     analogWrite(moteur_gauche, 0);    
-    analogWrite(moteur_droite, vitesse_gd_cmd);    
+    analogWrite(moteur_droite, -vitesse_gd_cmd);    
   }
   else {
     analogWrite(moteur_gauche, 0);    
@@ -459,15 +476,18 @@ void controle_moteurs() {
   
   if(digitalRead(bouton) == LOW) {
     // Vitesse basee sur la distance arriere
-    vitesse_av_cmd = map(ir_arriere_filtre, 184, 850, 20, 255);
+    vitesse_av_cmd = map(ir_arriere_filtre, 184, 850, 20, pwm_max);
   }
   else if(mannette_mouvement_actuel == arrete) {
     // Freinage
-    vitesse_av_cmd = constrain((int)pid(moteur_integrale_erreur, 
-                                     moteur_erreur_prec,
-                                     0,
-                                     vitesse_tic_par_cycle,
-                                     moteur_av_gain_pid), -255, 255);
+    vitesse_av_cmd = pid(moteur_integrale_erreur, 
+                         moteur_erreur_prec,
+                         moteur_commande_prec,
+                         0,
+                         vitesse_tic_par_cycle,
+                        -pwm_max, 
+                         pwm_max,
+                         moteur_av_gain_pid);
   }
   else {   
     if(mannette_mouvement_actuel == avance) {
@@ -481,7 +501,6 @@ void controle_moteurs() {
   }
   
   // Mise a jour de la commande PWM
-  if(abs(vitesse_av_cmd) < vitesse_av_moteur_min) vitesse_av_cmd = 0;
   if(vitesse_av_cmd > moteur_av_zone_morte) {
     // Activer le moteur avant
     analogWrite(moteur_avant, vitesse_av_cmd);
@@ -501,23 +520,42 @@ void controle_moteurs() {
   roue_phase_precedente = roue_phase_courante;
 }  
 
-float pid(long &integrale,
-          long &erreur_prec,
-          const long commande_desiree, 
-          const long lecture, 
-          const float *gain_pid) {
+int pid(long &integrale,
+        long &erreur_prec,
+        int &commande_prec,
+        const long commande_desiree, 
+        const long lecture,
+        const int commande_min, 
+        const int commande_max, 
+        const float *gain_pid) {
   
   long erreur = commande_desiree - lecture;
   
-  // A voir si l'integrale diverge sans mise a jour conditionnelle
-  integrale += erreur;      
-          
   float commande_pid = gain_pid[0] * (float)erreur + 
                        gain_pid[1] * (float)(erreur - erreur_prec) + 
                        gain_pid[2] * (float)integrale;
     
+  int commande_actuelle;
+  int commande_non_saturee = static_cast<int>(commande_pid);
+  
+  bool saturation = true;
+  if(commande_non_saturee < commande_min) 
+    commande_actuelle = commande_min;
+  else if(commande_non_saturee > commande_max) 
+    commande_actuelle = commande_max;
+  else {
+    commande_actuelle = commande_non_saturee;
+    saturation = false;
+  }
+  
+  // L'integrale diverge sans mise a jour conditionnelle
+  if(erreur * commande_non_saturee <= 0 || 
+     !saturation) {
+    integrale += erreur;      
+  }
+  
   // Mise a jour de l'erreur        
   erreur_prec = erreur;
-  
-  return commande_pid;        
+  commande_prec = commande_non_saturee;
+  return commande_actuelle;        
 }
