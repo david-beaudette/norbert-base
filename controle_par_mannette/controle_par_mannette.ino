@@ -81,14 +81,15 @@ const int vitesse_zero_tol_tic_par_cycle = 3;
 const float moteur_av_gain_pid[3] = {0.05f, 0.01f, 0.0f};
 const int moteur_av_zone_morte = 0;
 
-const float moteur_gd_gain_pid[3] = {0.20f, 0.0f, 0.05f};
-const int moteur_gd_zone_morte = 50;
+const float moteur_gd_gain_pid[3] = {0.5f, 0.0f, 0.0f};
+const int moteur_gd_zone_morte = 60;
+const int moteur_gd_vitesse_min = 50;
 const int moteur_gd_vitesse_max = 150;
 
 // Periodes entre les appels de fonction
 const int periode_affichage_ms          = 1000; 
 const int periode_controle_moteurs_ms   = 10;
-const int periode_lecture_analogique_ms = 5;
+const int periode_lecture_analogique_ms = 10;
 const int periode_controle_led_ms       = 10;
 
 
@@ -409,16 +410,20 @@ void controle_direction() {
                       -moteur_gd_vitesse_max, 
                        moteur_gd_vitesse_max,
                        moteur_gd_gain_pid);
+                       
+                       
+  int vitesse_gd_mag_cmd = map(abs(vitesse_gd_cmd), 
+                               0, moteur_gd_vitesse_max, 
+                               moteur_gd_zone_morte, 
+                               moteur_gd_vitesse_max);
   
-  if(vitesse_gd_cmd > moteur_gd_zone_morte &&
-     direction_filtre < 1020) {
-    analogWrite(moteur_gauche, vitesse_gd_cmd);    
+  if(vitesse_gd_cmd > moteur_gd_vitesse_min && direction_filtre < 1020) {
+    analogWrite(moteur_gauche, vitesse_gd_mag_cmd);    
     analogWrite(moteur_droite, 0);    
   }
-  else if(vitesse_gd_cmd < -moteur_gd_zone_morte &&
-          direction_filtre > 3) {
+  else if(vitesse_gd_cmd < -moteur_gd_vitesse_min && direction_filtre > 3) {
     analogWrite(moteur_gauche, 0);    
-    analogWrite(moteur_droite, -vitesse_gd_cmd);    
+    analogWrite(moteur_droite, vitesse_gd_mag_cmd);    
   }
   else {
     analogWrite(moteur_gauche, 0);    
